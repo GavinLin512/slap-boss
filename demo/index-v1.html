@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>三本柱單手 Demo</title>
+<style>
+  :root { --bg:#1e1a24; --fg:#f3eee6; --line:#5a4d66; --accent:#f5892a; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); }
+  body {
+    display:flex; flex-direction:column; align-items:center;
+    font-family:-apple-system,"PingFang TC","Noto Sans TC",sans-serif;
+    overscroll-behavior:none; -webkit-user-select:none; user-select:none;
+    -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;
+  }
+  header { display:flex; gap:6px; padding:10px 8px 6px; }
+  header button {
+    font:inherit; font-size:14px; padding:7px 12px; border-radius:8px;
+    border:1px solid var(--line); background:#2c2535; color:var(--fg); cursor:pointer;
+  }
+  header button.on { background:var(--accent); border-color:var(--accent); color:#1e1a24; font-weight:700; }
+  #help { font-size:13px; line-height:1.45; opacity:.85; padding:0 16px 8px; text-align:center; max-width:440px; min-height:38px; }
+  #wrap { flex:1; min-height:0; width:100%; display:flex; justify-content:center; align-items:flex-start; padding-bottom:8px; box-sizing:border-box; }
+  canvas { display:block; touch-action:none; border-radius:12px; }
+</style>
+</head>
+<body>
+<header>
+  <button data-m="A">A 插不上話</button>
+  <button data-m="B">B 甩鍋大會</button>
+  <button data-m="C">C 忍住不爆氣</button>
+</header>
+<div id="help"></div>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script type="module">
+import { build, Grid } from './sprites.js';
+
+// ================= 共用：畫布、座標 =================
+const LW = 360, LH = 640;
+const FONT = '-apple-system, "PingFang TC", "Noto Sans TC", sans-serif';
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const helpEl = document.getElementById('help');
+let K = 1;
+
+function resize() {
+  const wrap = document.getElementById('wrap');
+  const s = Math.min(Math.min(innerWidth, 520) / LW, (wrap.clientHeight - 8) / LH);
+  cv.style.width = LW * s + 'px';
+  cv.style.height = LH * s + 'px';
+  K = s * (devicePixelRatio || 1);
+  cv.width = Math.round(LW * K);
+  cv.height = Math.round(LH * K);
+}
+addEventListener('resize', resize);
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, u) => a + (b - a) * u;
+
+// ================= 精靈圖 =================
+const cache = new Map();
+function toCanvas(g) {
+  const c = document.createElement('canvas');
+  c.width = g.w;
+  c.height = g.h;
+  c.getContext('2d').putImageData(new ImageData(g.toRGBA(), g.w, g.h), 0, 0);
+  return c;
+}
+function spr(kind, opts = {}) {
+  const key = kind + JSON.stringify(opts);
+  let c = cache.get(key);
+  if (!c) {
+    c = toCanvas(build(kind, opts));
+    cache.set(key, c);
+  }
+  return c;
+}
+function drawImg(img, x, y, scale = 3, rot = 0, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(x, y);
+  if (rot) ctx.rotate(rot);
+  ctx.drawImage(img, (-img.width * scale) / 2, (-img.height * scale) / 2, img.width * scale, img.height * scale);
+  ctx.restore();
+}
+// 鍋：demo 用的臨時像素圖
+const WOK = (() => {
+  const g = new Grid(22, 12);
+  g.blob(11, 2, 8, 8, 'Z', { shade: 'K', clip: (x, y) => y >= 4 });
+  g.rect(3, 4, 16, 1, 'a');
+  g.rect(1, 4, 2, 1, 'd');
+  g.rect(19, 4, 2, 1, 'd');
+  g.outline();
+  return toCanvas(g);
+})();
+
+// ================= 共用特效 =================
+let floats = [], parts = [], shakeT = 0, shakeA = 0, flashT = 0, flashC = '#fff';
+function floatText(text, x, y, color = '#fff', size = 18) {
+  floats.push({ text, x, y, t: 0, color, size });
+}
+function shake(a, t) { shakeA = Math.max(shakeA, a); shakeT = Math.max(shakeT, t); }
+function flash(c, t = 0.25) { flashC = c; flashT = t; }
+function stars(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    parts.push({ x, y, vx: rand(-170, 170), vy: rand(-260, -60), t: 0, life: rand(0.4, 0.75), r: rand(0, 6), vr: rand(-9, 9) });
+  }
+}
+function updateFx(dt) {
+  floats.forEach((f) => (f.t += dt));
+  floats = floats.filter((f) => f.t < 1.1);
+  parts.forEach((p) => { p.t += dt; p.vy += 700 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.r += p.vr * dt; });
+  parts = parts.filter((p) => p.t < p.life);
+  shakeT -= dt;
+  if (shakeT <= 0) shakeA = 0;
+  flashT -= dt;
+}
+function drawFx() {
+  parts.forEach((p) => drawImg(spr('star'), p.x, p.y, 2, p.r, 1 - p.t / p.life));
+  floats.forEach((f) => {
+    const a = f.t < 0.7 ? 1 : 1 - (f.t - 0.7) / 0.4;
+    outlined(f.text, f.x, f.y - f.t * 40, f.size, f.color, a);
+  });
+}
+function outlined(s, x, y, size, color, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, alpha);
+  ctx.font = `700 ${size}px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#1e1a24';
+  ctx.strokeText(s, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function txt(s, x, y, { size = 14, color = '#f3eee6', align = 'center', bold = false, base = 'middle', alpha = 1 } = {}) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `${bold ? '700 ' : ''}${size}px ${FONT}`;
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.textBaseline = base;
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+function wrapText(s, maxW) {
+  const out = [];
+  let cur = '';
+  for (const ch of s) {
+    if (cur && ctx.measureText(cur + ch).width > maxW) { out.push(cur); cur = ch; } else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+// 對話框：x 是說話者中心，yb 是框底（尾巴指向下方）
+function bubble(x, yb, s, st = {}) {
+  ctx.save();
+  const size = st.size || 15;
+  ctx.font = `${st.bold ? '700 ' : ''}${size}px ${FONT}`;
+  const lines = wrapText(s || ' ', st.maxW || 170);
+  const lh = size * 1.3;
+  const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 20 + (st.padR || 0);
+  const h = lines.length * lh + 14;
+  const bx = clamp(x - w / 2, 6, LW - 6 - w);
+  const by = yb - h - 10;
+  const tx = clamp(x, bx + 14, bx + w - 14);
+  ctx.globalAlpha = st.alpha ?? 1;
+  ctx.fillStyle = st.bg || '#fffbe8';
+  ctx.strokeStyle = st.border || '#3b2340';
+  ctx.lineWidth = st.lw || 2;
+  rrect(bx, by, w, h, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tx - 7, by + h - 1);
+  ctx.lineTo(tx, by + h + 9);
+  ctx.lineTo(tx + 7, by + h - 1);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(tx - 7, by + h);
+  ctx.lineTo(tx, by + h + 9);
+  ctx.lineTo(tx + 7, by + h);
+  ctx.stroke();
+  ctx.fillStyle = st.fg || '#2a1830';
+  ctx.textBaseline = 'top';
+  lines.forEach((l, i) => ctx.fillText(l, bx + 10, by + 7 + i * lh));
+  ctx.restore();
+  return { x: bx, y: by, w, h };
+}
+
+// ================= 共用：三個角色 =================
+const KINDS = ['alpaca', 'persimmon', 'marketer'];
+const NAME = { alpaca: '羊駝', persimmon: '柿子', marketer: '清朝人' };
+const SLOT_X = [62, 180, 298];
+const TOP = { alpaca: 0, persimmon: 4, marketer: 0 };
+const HIT_LINE = {
+  alpaca: ['你知道我是誰嗎？', '小心你的績效考核！', '咳...咳咳！'],
+  persimmon: ['恩...喔....', 'IP 我記下了', '你被列入...黑名單了'],
+  marketer: ['我的形象！', '這不在提案裡', '注意你的品牌調性'],
+};
+const headY = (b) => b.y - 48 + TOP[b.kind] * 3;
+function makeBosses(y) {
+  return KINDS.map((kind, i) => ({ kind, i, x: SLOT_X[i], y, face: 'normal', faceT: 0, swell: 0, hitT: 0, talking: false, nohat: false, fly: null, react: null, stack: 0 }));
+}
+function hurt(b, swell = 1, face = 'ouch', t = 0.6) {
+  b.face = face;
+  b.faceT = t;
+  b.swell = Math.min(3, b.swell + swell);
+  b.hitT = 0.25;
+}
+function react(b, text, t = 1.1) { b.react = { text, t }; }
+function launch(b) {
+  const dir = b.i === 0 ? -1 : b.i === 2 ? 1 : pick([-1, 1]);
+  b.fly = { t: 0, dx: 0, dy: 0, vx: dir * rand(140, 240), vy: -820, r: 0, vr: dir * rand(9, 14) };
+  b.talking = false;
+}
+function updateBoss(b, dt) {
+  b.faceT -= dt;
+  b.hitT -= dt;
+  b.swell = Math.max(0, b.swell - dt * 0.35);
+  if (b.react) { b.react.t -= dt; if (b.react.t <= 0) b.react = null; }
+  if (b.fly) {
+    const f = b.fly;
+    f.t += dt;
+    f.vy += 320 * dt;
+    f.dx += f.vx * dt;
+    f.dy += f.vy * dt;
+    f.r += f.vr * dt;
+    if (f.t > 3.2) {
+      b.fly = null;
+      b.faceT = 0;
+      b.swell = 0;
+      floatText(`${NAME[b.kind]}回來了`, b.x, b.y - 50, '#bbb', 13);
+    }
+  }
+}
+function drawBoss(b, now) {
+  let x = b.x, y = b.y, rot = 0, sc = 3;
+  if (b.fly) {
+    if (b.fly.t > 2.2) return;
+    x += b.fly.dx;
+    y += b.fly.dy;
+    rot = b.fly.r;
+    sc = 3 * Math.max(0.25, 1 - b.fly.t * 0.35);
+  }
+  if (b.downT > 0) { rot = 1.3 * Math.min(1, (2 - b.downT) * 5) * (b.i === 2 ? 1 : -1); y += 20; }
+  if (b.hitT > 0) x += rand(-3, 3);
+  if (b.talking) y += Math.sin(now / 70) * 1.5;
+  const o = { face: b.faceT > 0 ? b.face : 'normal' };
+  const sw = Math.ceil(b.swell);
+  if (sw > 0) o.swell = sw;
+  if (b.kind === 'marketer') {
+    if (b.talking && Math.floor(now / 110) % 2) o.talk = true;
+    if (b.nohat) o.nohat = true;
+  }
+  drawImg(spr(b.kind, o), x, y, sc, rot);
+}
+function drawReacts(bs, lift = () => 0) {
+  bs.forEach((b) => {
+    if (b.react && !b.fly) bubble(b.x, headY(b) - 4 - lift(b), b.react.text, { size: 13, bg: '#3b2340', fg: '#fffbe8', border: '#fffbe8', alpha: Math.min(1, b.react.t * 3) });
+  });
+}
+function drawRoom(tableY) {
+  ctx.fillStyle = '#2f2839';
+  ctx.fillRect(0, 0, LW, LH);
+  ctx.fillStyle = '#3d3449';
+  ctx.fillRect(0, 0, LW, tableY ? tableY - 6 : 300);
+  // 窗戶
+  ctx.fillStyle = '#4b5d7a';
+  ctx.fillRect(252, 18, 88, 58);
+  ctx.strokeStyle = '#2a2333';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(252, 18, 88, 58);
+  ctx.beginPath(); ctx.moveTo(296, 18); ctx.lineTo(296, 76); ctx.stroke();
+  // 白板
+  ctx.fillStyle = '#e8e4dc';
+  ctx.fillRect(20, 20, 116, 54);
+  txt('Q4：全球市場', 78, 38, { size: 12, color: '#a32a3a', bold: true });
+  txt('預算：—', 78, 58, { size: 11, color: '#555' });
+}
+function drawTable(y) {
+  ctx.fillStyle = '#7a4a32';
+  ctx.fillRect(12, y, 336, 24);
+  ctx.fillStyle = '#5c3424';
+  ctx.fillRect(12, y + 24, 336, 8);
+}
+
+// ================= C：忍住不爆氣 =================
+const C = {
+  help: '按住畫面 = 忍（火氣開始累積）。放開 = 爆氣，打「正在講話」的人，火氣越滿打越狠。到 100% 會當場失控。空白鍵按住也可以。',
+  LINES: {
+    alpaca: ['這個很簡單吧？', '明天早上給我', '我們要做全球市場', '週末弄一下就好', '我只是提個想法'],
+    persimmon: [['痾', '你', '有試過', '重開機嗎？'], ['系統', '沒問題', '就是', '是你的問題'], ['這邊', '沒有收到', '你的', '工單']],
+    marketer: ['這個要更有感', '不夠 wow', '然後我跟你說…', '要有記憶點', '重點是…', '這個 KPI 很簡單', '我簡單講兩句', '注意你的品牌調性', '所以說呢…', '這個我用AI就可以做了'],
+  },
+  init() {
+    this.bs = makeBosses(208);
+    this.rage = 0;
+    this.holding = false;
+    this.wantHold = false;
+    this.cool = 0;
+    this.score = 0;
+    this.cur = null;
+    this.gap = 0.6;
+    this.last = null;
+    this.failT = 0;
+  },
+  startLine() {
+    const avail = this.bs.filter((b) => !b.fly);
+    if (!avail.length) { this.gap = 0.3; return; }
+    let b = pick(avail);
+    if (avail.length > 1 && b === this.last && Math.random() < 0.6) b = pick(avail.filter((x) => x !== b));
+    const L = this.LINES[b.kind];
+    let segs;
+    if (b.kind === 'alpaca') {
+      segs = [{ text: pick(L), cps: 0.08, gain: 0, pause: 0.05 }];
+    } else if (b.kind === 'persimmon') {
+      const l = pick(L);
+      segs = l.map((t, i) => {
+        const lastSeg = i === l.length - 1;
+        return { text: t, cps: lastSeg ? 0.07 : 0.11, gain: lastSeg ? 26 / t.length : 0.6, pause: lastSeg ? 0.05 : rand(0.45, 0.9), dots: !lastSeg };
+      });
+    } else {
+      const n = 3 + Math.floor(Math.random() * 2);
+      segs = [];
+      for (let i = 0; i < n; i++) segs.push({ text: pick(L) + (i < n - 1 ? '，' : ''), cps: 0.05, gain: 0, pause: 0.05 });
+    }
+    this.cur = { b, segs, si: 0, ci: 0, t: 0, phase: 'say', shown: '', talkT: 0, extra: false };
+    b.talking = true;
+    this.last = b;
+  },
+  gain(v) {
+    if (this.holding) this.rage += v;
+  },
+  tickLine(dt) {
+    const c = this.cur, b = c.b;
+    c.talkT += dt;
+    if (b.kind === 'marketer') {
+      this.gain((4 + 7 * c.talkT) * dt); // 越講越快
+      if (this.holding && !c.extra && this.rage >= 82) {
+        c.extra = true;
+        if (Math.random() < 0.75) {
+          c.segs.splice(c.si + 1, 0, { text: '我再補充一點！', cps: 0.04, gain: 0, pause: 0.05 });
+          this.gain(12);
+          floatText('+12', 30 + 300 * Math.min(1, this.rage / 100), 318, '#ff6b6b', 16);
+        }
+      }
+    }
+    if (c.phase === 'pause') {
+      c.t -= dt;
+      if (c.t <= 0) {
+        if (c.segs[c.si].dots) c.shown += '...';
+        c.si++;
+        c.ci = 0;
+        c.t = 0;
+        c.phase = 'say';
+        if (c.si >= c.segs.length) this.endLine();
+      }
+      return;
+    }
+    const seg = c.segs[c.si];
+    c.t += dt;
+    while (c.t >= seg.cps && c.ci < seg.text.length) {
+      c.t -= seg.cps;
+      c.shown += seg.text[c.ci++];
+      if (seg.gain) this.gain(seg.gain);
+    }
+    if (c.ci >= seg.text.length) { c.phase = 'pause'; c.t = seg.pause; }
+  },
+  endLine() {
+    const b = this.cur.b;
+    b.talking = false;
+    if (b.kind === 'alpaca' && this.holding) {
+      this.gain(16);
+      floatText('+16', 30 + 300 * Math.min(1, this.rage / 100), 318, '#ffc070', 16);
+    }
+    this.cur = null;
+    this.gap = rand(0.35, 0.8);
+  },
+  cancelLine() {
+    if (!this.cur) return;
+    this.cur.b.talking = false;
+    this.cur = null;
+    this.gap = rand(0.6, 1);
+  },
+  update(dt) {
+    this.bs.forEach((b) => updateBoss(b, dt));
+    if (this.failT > 0) {
+      this.failT -= dt;
+      if (this.failT <= 0) { this.rage = 0; this.score = 0; }
+      return;
+    }
+    this.cool -= dt;
+    if (this.wantHold && this.cool <= 0) { this.wantHold = false; this.holding = true; }
+    if (!this.cur) { this.gap -= dt; if (this.gap <= 0) this.startLine(); } else this.tickLine(dt);
+    if (this.rage >= 100) this.fail();
+  },
+  down() {
+    if (this.failT > 0) return;
+    if (this.cool > 0) { this.wantHold = true; return; }
+    this.holding = true;
+  },
+  up() {
+    this.wantHold = false;
+    if (!this.holding) return;
+    this.holding = false;
+    this.release();
+  },
+  release() {
+    const r = this.rage;
+    this.rage = 0;
+    this.cool = 0.35;
+    const b = this.cur ? this.cur.b : this.last;
+    if (r < 6) return;
+    if (!b || b.fly) { floatText('沒人在講話…', 180, 380, '#bbb', 15); return; }
+    const pts = Math.round(r < 30 ? r : r < 70 ? r * 1.5 : r * (r >= 95 ? 6 : 3));
+    this.score += pts;
+    const hy = headY(b);
+    if (r < 30) {
+      hurt(b, 1);
+      outlinedFloat('啪', b, '#fff', 22);
+      stars(b.x, b.y - 10, 3);
+      shake(3, 0.12);
+      react(b, pick(HIT_LINE[b.kind]));
+    } else if (r < 70) {
+      hurt(b, 3, 'dizzy', 1.4);
+      outlinedFloat('啪啪啪！', b, '#ffd84a', 24);
+      stars(b.x, b.y - 10, 9);
+      shake(6, 0.25);
+      if (this.cur && this.cur.b === b) this.cancelLine();
+      react(b, pick(HIT_LINE[b.kind]));
+    } else {
+      hurt(b, 3, 'dizzy', 3);
+      outlinedFloat(r >= 95 ? '神準！打飛出窗外！' : '打飛！', b, '#ff6b6b', 24);
+      stars(b.x, b.y - 10, 16);
+      shake(11, 0.4);
+      flash('#fff', 0.12);
+      if (this.cur && this.cur.b === b) this.cancelLine();
+      launch(b);
+    }
+    floatText(`+${pts}`, b.x, hy + 120, '#ffd84a', 15);
+  },
+  fail() {
+    this.holding = false;
+    this.failT = 2.2;
+    this.rage = 100;
+    flash('#e04848', 0.5);
+    shake(12, 0.6);
+    this.bs.forEach((b) => { if (!b.fly) { hurt(b, 0, 'shock', 2); b.talking = false; } });
+    this.cur = null;
+    this.gap = 2.4;
+  },
+  draw(now) {
+    const TY = 244;
+    drawRoom(TY);
+    this.bs.forEach((b) => drawBoss(b, now));
+    drawTable(TY);
+    const c = this.cur;
+    if (c) {
+      const b = c.b;
+      let s = c.shown + (c.phase === 'pause' && c.segs[c.si] && c.segs[c.si].dots ? '...' : '');
+      if (s.length > 30) s = '…' + s.slice(-29);
+      bubble(b.x, headY(b) - 4, s || ' ');
+    }
+    drawReacts(this.bs);
+
+    // 下半部：目標、火氣條、按鈕
+    txt(`分數 ${this.score}`, 16, 296, { align: 'left', size: 13, color: '#bbb' });
+    const tb = c ? c.b : this.last && !this.last.fly ? this.last : null;
+    txt(tb ? `放開會打：${NAME[tb.kind]}${c ? '' : '（剛講完）'}` : '（換人講話中）', 344, 296, { align: 'right', size: 14, bold: true, color: tb ? '#ffd84a' : '#888' });
+
+    const r = clamp(this.rage, 0, 100);
+    const bx = 30, by = 326, bw = 300, bh = 28;
+    const jx = this.holding && r > 80 ? rand(-2, 2) : 0;
+    ctx.fillStyle = '#1e1a24';
+    rrect(bx + jx, by, bw, bh, 8);
+    ctx.fill();
+    const col = r < 30 ? '#62b047' : r < 70 ? '#f5892a' : r < 95 ? '#e04848' : (Math.floor(now / 80) % 2 ? '#ff2b2b' : '#fff');
+    ctx.fillStyle = col;
+    rrect(bx + jx, by, (bw * r) / 100, bh, 8);
+    ctx.fill();
+    [30, 70, 95].forEach((m) => {
+      ctx.fillStyle = 'rgba(255,255,255,.5)';
+      ctx.fillRect(bx + (bw * m) / 100 - 1, by - 4, 2, bh + 8);
+    });
+    txt(`火氣 ${Math.floor(r)}%`, 180, by + bh / 2, { size: 14, bold: true, color: '#fff' });
+    const tiers = [[15, '啪'], [50, '連打'], [82, '打飛'], [97.5, '神準']];
+    tiers.forEach(([p, s]) => txt(s, bx + (bw * p) / 100, by + bh + 16, { size: 12, color: '#bbb' }));
+
+    const cx = 180, cy = 486;
+    const tr = this.holding ? r / 30 : 0;
+    const ox = rand(-tr, tr), oy = rand(-tr, tr);
+    ctx.beginPath();
+    ctx.arc(cx + ox, cy + oy, this.holding ? 50 : 54, 0, Math.PI * 2);
+    if (this.holding) {
+      ctx.fillStyle = r > 80 ? '#e04848' : '#f5892a';
+      ctx.fill();
+      txt('忍…', cx + ox, cy + oy, { size: 26, bold: true, color: '#1e1a24' });
+    } else {
+      ctx.setLineDash([6, 6]);
+      ctx.strokeStyle = '#f5892a';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      txt(this.cool > 0 ? '…' : '按住', cx, cy, { size: 22, bold: true, color: '#f5892a' });
+    }
+    txt('按住畫面任何地方都可以', 180, 572, { size: 12, color: '#888' });
+    txt('羊駝：一句一格　柿子：停頓後暴衝　清朝人：越講越快', 180, 600, { size: 11, color: '#777' });
+
+    if (this.failT > 0) {
+      ctx.fillStyle = 'rgba(160,30,40,.55)';
+      ctx.fillRect(0, 0, LW, LH);
+      outlined('你在會議上失控了', 180, 380, 26, '#fff');
+      outlined('績效考核：情緒管理待加強', 180, 416, 15, '#ffd84a');
+    }
+  },
+};
+function outlinedFloat(s, b, color, size) { floatText(s, b.x, headY(b) - 10, color, size); }
+
+// ================= A：插不上話 =================
+const A = {
+  help: '對話框變黃（他在停頓）時點一下 = 打斷，需求作廢。在他講話中、或轉圈圈（假停頓）時點會被抓包。讓他講完需求就進待辦，滿 5 條重來。空白鍵也可以。',
+  WIN: { alpaca: 0.5, persimmon: 0.55, marketer: 0.34 },
+  CPS: { alpaca: 0.085, persimmon: 0.11, marketer: 0.045 },
+  LINES: {
+    alpaca: [
+      [['這個很簡單吧？', 'win']],
+      [['明天早上給我，', 'talk'], ['沒問題吧？', 'win']],
+      [['我們要做全球市場，', 'talk'], ['很簡單吧？', 'win']],
+      [['週末弄一下就好，', 'talk'], ['可以吧？', 'win']],
+    ],
+    persimmon: [
+      [['痾', 'win'], ['你', 'win'], ['有試過', 'fake'], ['重開機嗎？', 'end']],
+      [['系統', 'win'], ['沒問題', 'fake'], ['就是', 'win'], ['是你的問題', 'end']],
+      [['這個', 'fake'], ['權限', 'win'], ['好像', 'win'], ['不能開', 'end']],
+    ],
+  },
+  RANT: ['然後我跟你說…', '這個我們之前就講過了', '重點是…', '要有記憶點', '不夠 wow', '所以說呢…', '你先聽我說完', '還有一件事', '這個很重要喔', '注意你的品牌調性'],
+  DEMAND: { alpaca: ['很簡單的那個', '明天早上交', '全球市場', '週末弄一下'], persimmon: ['自己重開機', '是你的問題', '權限申請單'], marketer: ['要更 wow', '要有記憶點', '品牌調性'] },
+  init() {
+    this.bs = makeBosses(208);
+    this.todo = [];
+    this.score = 0;
+    this.cur = null;
+    this.gap = 1;
+    this.cool = 0;
+    this.failT = 0;
+    this.rantHits = 0;
+    this.last = null;
+  },
+  rantSegs(prefix) {
+    const n = 3 + Math.floor(Math.random() * 2);
+    const winAt = Math.floor(Math.random() * (n - 1));
+    const segs = prefix ? [[prefix, 'talk']] : [];
+    for (let i = 0; i < n; i++) segs.push([pick(this.RANT) + (i < n - 1 ? '，' : ''), i === n - 1 ? 'end' : i === winAt || Math.random() < 0.25 ? 'win' : 'talk']);
+    return segs;
+  },
+  say(b, segs) {
+    this.cur = { b, segs: segs.map(([text, kind]) => ({ text, kind })), si: 0, ci: 0, t: 0, phase: 'say', shown: '' };
+    b.talking = true;
+    this.last = b;
+  },
+  startLine() {
+    let b = pick(this.bs);
+    if (b === this.last && Math.random() < 0.6) b = pick(this.bs.filter((x) => x !== b));
+    if (b.kind === 'marketer') { this.rantHits = 0; this.say(b, this.rantSegs()); } else this.say(b, pick(this.LINES[b.kind]));
+  },
+  update(dt) {
+    this.bs.forEach((b) => updateBoss(b, dt));
+    this.cool -= dt;
+    if (this.failT > 0) {
+      this.failT -= dt;
+      if (this.failT <= 0) { this.todo = []; this.score = 0; }
+      return;
+    }
+    if (!this.cur) { this.gap -= dt; if (this.gap <= 0) this.startLine(); return; }
+    const c = this.cur, kind = c.b.kind;
+    if (c.phase === 'say') {
+      const seg = c.segs[c.si];
+      const cps = this.CPS[kind];
+      c.t += dt;
+      while (c.t >= cps && c.ci < seg.text.length) { c.t -= cps; c.shown += seg.text[c.ci++]; }
+      if (c.ci >= seg.text.length) {
+        if (seg.kind === 'end') { this.land(); return; }
+        c.phase = seg.kind;
+        c.t = seg.kind === 'win' ? this.WIN[kind] : seg.kind === 'fake' ? 1.0 : 0.12;
+      }
+    } else {
+      c.t -= dt;
+      if (c.t <= 0) {
+        if (c.phase === 'win' || c.phase === 'fake') c.shown += '…';
+        c.si++;
+        c.ci = 0;
+        c.t = 0;
+        c.phase = 'say';
+        if (c.si >= c.segs.length) this.land();
+      }
+    }
+  },
+  land() {
+    const b = this.cur.b;
+    b.talking = false;
+    this.cur = null;
+    this.gap = rand(0.6, 1.1);
+    this.todo.push(pick(this.DEMAND[b.kind]));
+    b.face = 'happy';
+    b.faceT = 0.8;
+    floatText('講完了，+1 待辦', 180, 300, '#ff6b6b', 15);
+    if (this.todo.length >= 5) this.fail();
+  },
+  fail() {
+    this.failT = 2;
+    flash('#e04848', 0.4);
+    shake(8, 0.4);
+    if (this.cur) this.cur.b.talking = false;
+    this.cur = null;
+    this.gap = 2.3;
+  },
+  down() {
+    if (this.failT > 0 || this.cool > 0) return;
+    const c = this.cur;
+    if (!c) return;
+    const b = c.b;
+    if (c.phase === 'win') {
+      hurt(b, 2, 'ouch', 0.7);
+      stars(b.x, b.y - 10, 6);
+      shake(5, 0.15);
+      floatText('打斷！', b.x, headY(b) - 20, '#ffd84a', 24);
+      this.score++;
+      b.talking = false;
+      this.cur = null;
+      this.gap = rand(0.7, 1.1);
+      if (b.kind === 'marketer') {
+        this.rantHits++;
+        if (this.rantHits < 3) this.say(b, this.rantSegs('等一下，我還沒講完，'));
+        else { floatText('清朝人閉嘴了！+3', 220, 300, '#62b047', 18); this.score += 3; this.rantHits = 0; }
+      }
+    } else {
+      this.cool = 0.35;
+      const fake = c.phase === 'fake';
+      react(b, fake ? 'IP 我記下了' : '你在打斷我嗎？');
+      this.todo.push(fake ? '被記 IP' : '寫檢討報告');
+      floatText('被抓包，+1 待辦', 180, 300, '#ff6b6b', 15);
+      if (this.todo.length >= 5) this.fail();
+    }
+  },
+  draw(now) {
+    const TY = 244;
+    drawRoom(TY);
+    this.bs.forEach((b) => drawBoss(b, now));
+    drawTable(TY);
+    const c = this.cur;
+    let status = '（換人講話中）', stCol = '#888';
+    if (c) {
+      const b = c.b;
+      let s = c.shown;
+      if (s.length > 28) s = '…' + s.slice(-27);
+      if (c.phase === 'win') {
+        const r = bubble(b.x, headY(b) - 4, s + '…', { bg: '#ffd84a', border: '#f5892a', lw: 4, bold: true });
+        outlined('點！', Math.min(r.x + r.w - 4, LW - 22), r.y - 4, 16, '#ffd84a');
+        status = '現在點！';
+        stCol = '#ffd84a';
+      } else if (c.phase === 'fake') {
+        const r = bubble(b.x, headY(b) - 4, s, { bg: '#cfd3da', border: '#767c89', padR: 20 });
+        const a = now / 120;
+        ctx.strokeStyle = '#3b2340';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(r.x + r.w - 16, r.y + r.h / 2, 6, a, a + 4.6);
+        ctx.stroke();
+        status = '轉圈圈是假停頓，別點';
+        stCol = '#cfd3da';
+      } else {
+        bubble(b.x, headY(b) - 4, s || ' ');
+        status = `${NAME[b.kind]}講話中…`;
+        stCol = '#f3eee6';
+      }
+      if (b.kind === 'marketer') {
+        txt('閉嘴進度', 250, 296, { size: 12, color: '#bbb', align: 'right' });
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath();
+          ctx.arc(266 + i * 18, 296, 6, 0, Math.PI * 2);
+          ctx.fillStyle = i < this.rantHits ? '#62b047' : '#1e1a24';
+          ctx.fill();
+          ctx.strokeStyle = '#62b047';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      }
+    }
+    drawReacts(this.bs);
+    txt(`分數 ${this.score}`, 16, 296, { align: 'left', size: 13, color: '#bbb' });
+
+    // 待辦清單
+    txt(`你的待辦 ${this.todo.length}/5`, 30, 330, { align: 'left', size: 14, bold: true });
+    for (let i = 0; i < 5; i++) {
+      const y = 348 + i * 38;
+      if (i < this.todo.length) {
+        ctx.fillStyle = '#fffbe8';
+        rrect(30, y, 300, 30, 6);
+        ctx.fill();
+        txt(`□ ${this.todo[i]}`, 42, y + 15, { align: 'left', size: 14, color: '#2a1830' });
+      } else {
+        ctx.setLineDash([4, 5]);
+        ctx.strokeStyle = '#5a4d66';
+        ctx.lineWidth = 1.5;
+        rrect(30, y, 300, 30, 6);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    outlined(status, 180, 560, 20, stCol);
+    txt('點畫面任何地方都可以', 180, 592, { size: 12, color: '#888' });
+    txt('羊駝：只能打句尾「吧？」　柿子：真假停頓　清朝人：要打斷 3 次', 180, 616, { size: 11, color: '#777' });
+
+    if (this.failT > 0) {
+      ctx.fillStyle = 'rgba(160,30,40,.55)';
+      ctx.fillRect(0, 0, LW, LH);
+      outlined('待辦滿了，今晚加班', 180, 380, 26, '#fff');
+      outlined('（自動重來）', 180, 416, 14, '#ffd84a');
+    }
+  },
+};
+
+// ================= B：甩鍋大會 =================
+const B = {
+  help: '鍋飛過來時，往某人的方向劃一下（左上／正上／右上），把最靠近你的鍋甩到他頭上。被砸的人有時會甩給原本丟鍋的人。桌上滿 5 個鍋重來。鍵盤：← ↑ →',
+  LABEL: { alpaca: ['很簡單吧', '明天早上', '全球市場', '週末弄一下'], persimmon: ['重開機', '你的問題', '工單呢'], marketer: ['不夠wow', '記憶點', '品牌調性', 'AI就能做'] },
+  RATE: { alpaca: [1.8, 2.6], persimmon: [3.6, 5], marketer: [2.8, 3.8] },
+  DUR: { alpaca: 2.4, persimmon: 3.3, marketer: 2.8 },
+  THROW_LINE: { alpaca: '這不是我的問題', persimmon: '這...不在SOP裡', marketer: '注意你的品牌調性' },
+  DESK: { x: 180, y: 590 },
+  init() {
+    this.bs = makeBosses(150);
+    this.items = [];
+    this.desk = 0;
+    this.score = 0;
+    this.spawnT = [1.2, 3.2, 2.2];
+    this.drag = null;
+    this.failT = 0;
+    this.t = 0;
+    this.later = [];
+  },
+  spawn(b) {
+    this.items.push({
+      label: pick(this.LABEL[b.kind]), x0: b.x, y0: b.y + 10, x1: this.DESK.x + rand(-60, 60), y1: 562,
+      t: 0, dur: this.DUR[b.kind] * rand(0.9, 1.1), arc: rand(20, 60), state: 'in', origin: b.i, by: b.i,
+      x: b.x, y: b.y + 10, rot: 0, vr: rand(-4, 4), rally: 0.5,
+    });
+  },
+  update(dt) {
+    this.bs.forEach((b) => updateBoss(b, dt));
+    if (this.failT > 0) {
+      this.failT -= dt;
+      if (this.failT <= 0) { this.desk = 0; this.score = 0; this.t = 0; this.bs.forEach((b) => (b.stack = 0)); }
+      return;
+    }
+    this.t += dt;
+    const ramp = Math.max(0.55, 1 - this.t / 90);
+    this.bs.forEach((b, i) => {
+      if (b.downT > 0) { b.downT -= dt; return; }
+      this.spawnT[i] -= dt;
+      if (this.spawnT[i] <= 0) { this.spawn(b); this.spawnT[i] = rand(...this.RATE[b.kind]) * ramp; }
+    });
+    this.later = this.later.filter((l) => { l.t -= dt; if (l.t <= 0) { l.fn(); return false; } return true; });
+    for (const it of this.items) {
+      if (it.state === 'drop') {
+        it.vy += 900 * dt; it.x += it.vx * dt; it.y += it.vy * dt; it.rot += it.vr * dt; it.life -= dt;
+        continue;
+      }
+      it.t += dt;
+      const u = Math.min(1, it.t / it.dur);
+      it.x = lerp(it.x0, it.x1, u);
+      it.y = lerp(it.y0, it.y1, u) - Math.sin(Math.PI * u) * it.arc;
+      it.rot += it.vr * dt;
+      if (u >= 1) this.arrive(it);
+    }
+    this.items = this.items.filter((it) => !it.dead && !(it.state === 'drop' && it.life <= 0));
+  },
+  dropWok(x, y) {
+    this.items.push({ state: 'drop', label: '', x, y, vx: rand(-160, 160), vy: rand(-320, -160), rot: 0, vr: rand(-10, 10), life: 1.2 });
+  },
+  arrive(it) {
+    it.dead = true;
+    if (it.state === 'in') {
+      this.desk++;
+      shake(4, 0.15);
+      floatText('背鍋 +1', this.DESK.x, 548, '#ff6b6b', 16);
+      if (this.desk >= 5) this.fail();
+      return;
+    }
+    const b = this.bs[it.target];
+    if (b.downT > 0) { this.dropWok(it.x, it.y); return; }
+    b.stack++;
+    hurt(b, 1, 'ouch', 0.6);
+    stars(b.x, headY(b), 4);
+    if (it.by === 'player') this.score += 1;
+    else { this.score += 2; floatText('互甩！', b.x, headY(b) - 40, '#ffd84a', 20); }
+    if (b.stack >= 5) {
+      for (let k = 0; k < b.stack; k++) this.dropWok(b.x, headY(b) - k * 9);
+      b.stack = 0;
+      b.downT = 2;
+      hurt(b, 3, 'dizzy', 2);
+      floatText(`${NAME[b.kind]}被鍋壓垮！+5`, b.x, b.y + 70, '#62b047', 16);
+      this.score += 5;
+      shake(6, 0.3);
+      return;
+    }
+    react(b, pick(HIT_LINE[b.kind]), 0.9);
+    if (it.origin !== it.target && Math.random() < it.rally) {
+      const from = it.target, to = it.origin, rally = it.rally * 0.6, label = it.label;
+      this.later.push({ t: 0.55, fn: () => {
+        const fb = this.bs[from], tb = this.bs[to];
+        if (fb.downT > 0 || fb.stack <= 0) return;
+        fb.stack--;
+        react(fb, this.THROW_LINE[fb.kind], 1);
+        this.items.push({
+          label, x0: fb.x, y0: headY(fb) - fb.stack * 9, x1: tb.x, y1: headY(tb) - tb.stack * 9,
+          t: 0, dur: 0.5, arc: 50, state: 'out', origin: from, target: to, by: from, x: fb.x, y: headY(fb), rot: 0, vr: 10, rally,
+        });
+      } });
+    }
+  },
+  fail() {
+    this.failT = 2;
+    flash('#e04848', 0.4);
+    shake(10, 0.5);
+    this.items = [];
+    this.later = [];
+  },
+  nextWok() {
+    const inc = this.items.filter((it) => it.state === 'in');
+    if (!inc.length) return null;
+    return inc.reduce((a, b) => (b.t / b.dur > a.t / a.dur ? b : a));
+  },
+  aimOf(dx, dy) {
+    const a = Math.atan2(dx, -dy);
+    return a < -0.33 ? 0 : a > 0.33 ? 2 : 1;
+  },
+  fling(ti) {
+    if (this.failT > 0) return;
+    const it = this.nextWok();
+    if (!it) { floatText('還沒有鍋可以甩', 180, 470, '#bbb', 14); return; }
+    const b = this.bs[ti];
+    Object.assign(it, { state: 'out', x0: it.x, y0: it.y, x1: b.x, y1: headY(b) - b.stack * 9, t: 0, dur: 0.42, arc: 24, target: ti, by: 'player', vr: 12 });
+  },
+  down(x, y, isKey) {
+    if (isKey) return;
+    this.drag = { x0: x, y0: y, x, y };
+  },
+  move(x, y) {
+    if (this.drag) { this.drag.x = x; this.drag.y = y; }
+  },
+  up(x, y, cancel) {
+    const d = this.drag;
+    this.drag = null;
+    if (!d || cancel || x == null) return;
+    const dx = x - d.x0, dy = y - d.y0;
+    if (Math.hypot(dx, dy) < 24 || dy > -8) return;
+    this.fling(this.aimOf(dx, dy));
+  },
+  key(code) {
+    const m = { ArrowLeft: 0, ArrowUp: 1, ArrowRight: 2 };
+    if (code in m) this.fling(m[code]);
+  },
+  draw(now) {
+    drawRoom(0);
+    ctx.fillStyle = '#2f2839';
+    ctx.fillRect(0, 300, LW, LH - 300);
+    this.bs.forEach((b) => {
+      drawBoss(b, now);
+      for (let k = 0; k < b.stack; k++) drawImg(WOK, b.x + Math.sin(now / 300 + k) * k * 0.8, headY(b) - 2 - k * 9, 2.4, Math.PI);
+    });
+
+    // 瞄準線
+    const d = this.drag;
+    if (d) {
+      const dx = d.x - d.x0, dy = d.y - d.y0;
+      if (Math.hypot(dx, dy) > 14 && dy < -4) {
+        const tb = this.bs[this.aimOf(dx, dy)];
+        ctx.save();
+        ctx.setLineDash([8, 8]);
+        ctx.strokeStyle = '#ffd84a';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(180, 540);
+        ctx.lineTo(tb.x, headY(tb) + 10);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(tb.x, tb.y, 54, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        outlined(`甩給${NAME[tb.kind]}`, tb.x, tb.y + 66, 15, '#ffd84a');
+      }
+    }
+
+    // 下一個會被甩的鍋
+    const nx = this.nextWok();
+    if (nx) {
+      ctx.beginPath();
+      ctx.arc(nx.x, nx.y, 30, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,216,74,.8)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    for (const it of this.items) {
+      const flip = it.state === 'out' ? Math.PI : 0;
+      drawImg(WOK, it.x, it.y, 2.4, it.rot * 0.15 + flip, it.state === 'drop' ? Math.max(0, it.life) : 1);
+      if (it.label && it.state !== 'drop') outlined(it.label, it.x, it.y - 22, 12, '#fff');
+    }
+    drawReacts(this.bs, (b) => b.stack * 9);
+
+    // 你的桌子
+    ctx.fillStyle = '#7a4a32';
+    ctx.fillRect(60, 592, 240, 20);
+    ctx.fillStyle = '#5c3424';
+    ctx.fillRect(60, 612, 240, 6);
+    for (let k = 0; k < this.desk; k++) drawImg(WOK, 100 + k * 40, 580, 2.2);
+    txt(`你的桌子　背鍋 ${this.desk}/5`, 180, 630, { size: 12, color: '#bbb' });
+    txt(`分數 ${this.score}`, 16, 318, { align: 'left', size: 13, color: '#bbb' });
+    txt('在下半部往上劃：↖ 羊駝　↑ 柿子　↗ 清朝人', 180, 470, { size: 13, color: '#888' });
+
+    if (this.failT > 0) {
+      ctx.fillStyle = 'rgba(160,30,40,.55)';
+      ctx.fillRect(0, 0, LW, LH);
+      outlined('你背了 5 個鍋', 180, 380, 26, '#fff');
+      outlined('（自動重來）', 180, 416, 14, '#ffd84a');
+    }
+  },
+};
+
+// ================= 切換、輸入、主迴圈 =================
+const MODES = { A, B, C };
+let mode = C;
+function setMode(k) {
+  mode = MODES[k];
+  floats = [];
+  parts = [];
+  shakeT = 0;
+  flashT = 0;
+  mode.init();
+  helpEl.textContent = mode.help;
+  document.querySelectorAll('header button').forEach((b) => b.classList.toggle('on', b.dataset.m === k));
+  try { localStorage.setItem('beatboss-demo', k); } catch {}
+  resize();
+}
+// 測試用：記錄未捕捉的錯誤、讓外部讀目前模式
+addEventListener('error', (e) => { window.__demoErr = String(e.message); });
+window.__demo = { mode: () => mode };
+document.querySelectorAll('header button').forEach((btn) => {
+  btn.addEventListener('click', () => { setMode(btn.dataset.m); btn.blur(); });
+});
+
+function toLogical(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: ((e.clientX - r.left) / r.width) * LW, y: ((e.clientY - r.top) / r.height) * LH };
+}
+let activePtr = null;
+cv.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (activePtr !== null) return;
+  activePtr = e.pointerId;
+  try { cv.setPointerCapture(e.pointerId); } catch {}
+  const p = toLogical(e);
+  mode.down?.(p.x, p.y, false);
+});
+cv.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== activePtr) return;
+  const p = toLogical(e);
+  mode.move?.(p.x, p.y);
+});
+function endPtr(e) {
+  if (e.pointerId !== activePtr) return;
+  activePtr = null;
+  const p = toLogical(e);
+  mode.up?.(p.x, p.y, e.type === 'pointercancel');
+}
+cv.addEventListener('pointerup', endPtr);
+cv.addEventListener('pointercancel', endPtr);
+cv.addEventListener('lostpointercapture', endPtr);
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (!e.repeat) mode.down?.(null, null, true);
+  } else if (e.code.startsWith('Arrow')) {
+    e.preventDefault();
+    if (!e.repeat) mode.key?.(e.code);
+  }
+});
+addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); mode.up?.(null, null, false); }
+});
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  mode.update(dt, now);
+  updateFx(dt);
+  ctx.setTransform(K, 0, 0, K, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#2f2839';
+  ctx.fillRect(0, 0, LW, LH);
+  if (shakeT > 0) ctx.translate(rand(-shakeA, shakeA), rand(-shakeA, shakeA));
+  mode.draw(now);
+  drawFx();
+  if (flashT > 0) {
+    ctx.setTransform(K, 0, 0, K, 0, 0);
+    ctx.globalAlpha = Math.min(1, flashT * 3);
+    ctx.fillStyle = flashC;
+    ctx.fillRect(0, 0, LW, LH);
+    ctx.globalAlpha = 1;
+  }
+  requestAnimationFrame(frame);
+}
+
+resize();
+let startMode = 'C';
+try { startMode = localStorage.getItem('beatboss-demo') || 'C'; } catch {}
+setMode(MODES[startMode] ? startMode : 'C');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

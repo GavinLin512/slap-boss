@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1e1a24">
+<title>來回巴掌</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/src/client/style.css">
+</head>
+<body>
+<header>
+  <span class="ttl">來回巴掌</span>
+  <button id="stats">今日成績</button>
+  <button id="rank">排行榜</button>
+  <button id="snd">音效 開</button>
+</header>
+<div id="help"></div>
+<div id="wrap"><canvas id="cv"></canvas></div>
+
+<div id="nameBox" class="ov" hidden>
+  <form id="nameForm" class="card" novalidate>
+    <h2>今天是誰在打？</h2>
+    <p>輸入名字，今天所有的出手次數都會算在這個名字下。換手機或電腦，用同一個名字就會合併。</p>
+    <input id="nameIn" maxlength="16" autocomplete="nickname" placeholder="你的名字" aria-label="你的名字">
+    <button class="btn" type="submit">開始打</button>
+  </form>
+</div>
+
+<div id="statBox" class="ov" hidden>
+  <div class="card wide" role="dialog" aria-labelledby="stName">
+    <div class="row"><h2 id="stName">今日成績</h2><button id="stClose" class="ghost" type="button">關閉</button></div>
+    <div class="nums">
+      <div><b id="stTotal">0</b><span>今日出手</span></div>
+      <div><b id="stKo">0</b><span>打倒幾個</span></div>
+      <div><b id="stCombo">0</b><span>最高連打</span></div>
+    </div>
+    <div class="chartHead">每段時間的出手次數<span id="stBin"></span></div>
+    <div id="chartWrap"><div id="chart"></div><div id="tip" hidden></div></div>
+    <p id="stNote"></p>
+    <details><summary>明細</summary><table id="stTable"></table></details>
+    <div><button id="rename" class="ghost" type="button">不是你？改名字</button></div>
+  </div>
+</div>
+
+<div id="rankBox" class="ov" hidden>
+  <div class="card wide" role="dialog" aria-labelledby="rkTitle">
+    <div class="row"><h2 id="rkTitle">今日怒氣榜</h2><button id="rkClose" class="ghost" type="button">關閉</button></div>
+    <p id="rkSum"></p>
+    <div class="sec">誰今天最慘</div>
+    <div id="rkVic" class="vic"></div>
+    <p id="rkMe" class="callout" hidden></p>
+    <div class="sec">出手排行</div>
+    <ol id="rkList" class="lb"></ol>
+    <div class="sec">今日頒獎</div>
+    <ul id="rkAward" class="aw"></ul>
+    <p id="rkNote"></p>
+  </div>
+</div>
+<script type="module" src="/src/client/main.js"></script>
+</body>
+</html>

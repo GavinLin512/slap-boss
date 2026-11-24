@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.cloudflare/
+.wrangler/
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+*.log
+.DS_Store
+
+# AI 工具的設定，不屬於網站
+.claude/
+.agents/
+skills-lock.json

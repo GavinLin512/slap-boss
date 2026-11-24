@@ -8,9 +8,8 @@ export default defineConfig({
 		entrypoint,
 		observability: { enabled: true },
 		env: {
-			// 第一次 cf deploy 時會自動在你的帳號建立這個資料庫；資料表由 Worker 自己建立。
-			// 部署後用 `npx cf d1 list` 查 uuid，填成 { name: "beatboss-db", id: "<uuid>" }（見 README 部署第 5 步）
-			DB: bindings.d1({ name: "beatboss-db" }),
+			// 資料庫在第一次部署時自動建立，ID 固定在這裡，之後每次部署都接同一個；資料表由 Worker 自己建立
+			DB: bindings.d1({ name: "beatboss-db", id: "83e56ca7-7ebc-43a4-b826-d2e9cbe00b45" }),
 		},
 	},
 });
